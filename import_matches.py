@@ -84,12 +84,14 @@ def _validate_row(row: dict, row_number: int) -> MatchResult:
 
 def import_matches(path: Path) -> list[MatchResult]:
     """
-    Parse *path* and return a list of MatchResult objects.
+    Parse *path* and return a list of MatchResult objects sorted chronologically.
 
-    Raises RowError for the first invalid row encountered.
+    Raises RowError for the first invalid row encountered, including duplicate
+    fixtures (same date, home_team, away_team).
     Raises ValueError if required columns are absent from the header.
     """
     results: list[MatchResult] = []
+    seen: dict[tuple, int] = {}  # fixture key -> first row number
 
     with path.open(newline="", encoding="utf-8") as fh:
         reader = csv.DictReader(fh)
@@ -104,8 +106,18 @@ def import_matches(path: Path) -> list[MatchResult]:
 
         for row_number, raw_row in enumerate(reader, start=2):
             row = {k.strip(): v for k, v in raw_row.items() if k is not None}
-            results.append(_validate_row(row, row_number))
+            match = _validate_row(row, row_number)
+            key = (match.date, match.home_team, match.away_team)
+            if key in seen:
+                raise RowError(
+                    row_number,
+                    f"duplicate fixture: {match.home_team} vs {match.away_team} on {match.date} "
+                    f"already seen at row {seen[key]}",
+                )
+            seen[key] = row_number
+            results.append(match)
 
+    results.sort(key=lambda m: m.date)
     return results
 
 

@@ -157,3 +157,60 @@ class TestInvalidRows:
         )
         with pytest.raises(RowError):
             import_matches(csv_file(tmp_path, content))
+
+
+# ---------------------------------------------------------------------------
+# Duplicate-fixture tests
+# ---------------------------------------------------------------------------
+
+class TestDuplicateFixtures:
+    def test_duplicate_raises_row_error(self, tmp_path):
+        content = (
+            "date,home_team,away_team,home_score,away_score\n"
+            "2024-01-01,Arsenal,Chelsea,1,0\n"   # row 2
+            "2024-01-01,Arsenal,Chelsea,2,1\n"   # row 3 — duplicate fixture
+        )
+        with pytest.raises(RowError, match="duplicate"):
+            import_matches(csv_file(tmp_path, content))
+
+    def test_duplicate_row_error_has_correct_row_number(self, tmp_path):
+        content = (
+            "date,home_team,away_team,home_score,away_score\n"
+            "2024-01-01,Arsenal,Chelsea,1,0\n"
+            "2024-01-02,Liverpool,City,0,0\n"
+            "2024-01-01,Arsenal,Chelsea,2,1\n"   # row 4 — duplicate
+        )
+        with pytest.raises(RowError) as exc_info:
+            import_matches(csv_file(tmp_path, content))
+        assert exc_info.value.row_number == 4
+
+    def test_same_teams_different_date_is_not_duplicate(self, tmp_path):
+        content = (
+            "date,home_team,away_team,home_score,away_score\n"
+            "2024-01-01,Arsenal,Chelsea,1,0\n"
+            "2024-02-01,Arsenal,Chelsea,2,1\n"
+        )
+        results = import_matches(csv_file(tmp_path, content))
+        assert len(results) == 2
+
+
+# ---------------------------------------------------------------------------
+# Chronological ordering tests
+# ---------------------------------------------------------------------------
+
+class TestChronologicalOrder:
+    def test_out_of_order_csv_sorted_on_return(self, tmp_path):
+        content = (
+            "date,home_team,away_team,home_score,away_score\n"
+            "2024-03-01,Arsenal,Chelsea,1,0\n"
+            "2024-01-15,Liverpool,City,2,2\n"
+            "2024-02-10,Spurs,Everton,0,1\n"
+        )
+        results = import_matches(csv_file(tmp_path, content))
+        dates = [m.date for m in results]
+        assert dates == sorted(dates)
+
+    def test_already_sorted_csv_stays_sorted(self, tmp_path):
+        results = import_matches(csv_file(tmp_path, VALID_CSV))
+        dates = [m.date for m in results]
+        assert dates == sorted(dates)
