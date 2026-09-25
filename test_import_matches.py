@@ -391,6 +391,24 @@ class TestDateRangeConstruction:
         with pytest.raises(AttributeError):
             r.start = date(2024, 6, 1)
 
+    def test_date_range_str_representation(self):
+        r = DateRange(start=date(2024, 1, 1), end=date(2024, 12, 31))
+        assert str(r) == "2024-01-01 to 2024-12-31"
+
+    def test_date_range_str_with_single_day(self):
+        r = DateRange(start=date(2024, 6, 15), end=date(2024, 6, 15))
+        assert str(r) == "2024-06-15 to 2024-06-15"
+
+    def test_date_range_str_in_error_message(self, tmp_path):
+        content = "date,home_team,away_team,home_score,away_score\n2025-01-01,Arsenal,Chelsea,1,0\n"
+        date_range = DateRange(start=date(2024, 1, 1), end=date(2024, 12, 31))
+        with pytest.raises(InvalidMatch) as exc_info:
+            import_matches(csv_file(tmp_path, content), date_range=date_range)
+        # The error message should reference the string representation
+        error_msg = str(exc_info.value)
+        assert "2024-01-01" in error_msg
+        assert "2024-12-31" in error_msg
+
 
 class TestDateRangeValidation:
     def test_import_without_date_range_accepts_any_date(self, tmp_path):

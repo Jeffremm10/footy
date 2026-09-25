@@ -55,6 +55,9 @@ class DateRange:
         if self.start > self.end:
             raise ValueError(f"DateRange start ({self.start}) must not be after end ({self.end})")
 
+    def __str__(self) -> str:
+        return f"{self.start} to {self.end}"
+
 
 class RowError(ValueError):
     """Raised when a CSV row fails validation (parse error)."""
