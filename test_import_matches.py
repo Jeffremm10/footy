@@ -1,11 +1,11 @@
 import io
 import textwrap
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
 
-from import_matches import MatchResult, RowError, InvalidMatch, import_matches, _normalize_team_name
+from import_matches import MatchResult, RowError, InvalidMatch, DateRange, import_matches, _normalize_team_name
 
 
 # ---------------------------------------------------------------------------
@@ -366,3 +366,125 @@ class TestInvalidMatch:
             pass  # Expected
         except RowError:
             pytest.fail("Should raise InvalidMatch, not RowError")
+
+
+# ---------------------------------------------------------------------------
+# Date range validation tests
+# ---------------------------------------------------------------------------
+
+class TestDateRangeConstruction:
+    def test_valid_date_range_construction(self):
+        r = DateRange(start=date(2024, 1, 1), end=date(2024, 12, 31))
+        assert r.start == date(2024, 1, 1)
+        assert r.end == date(2024, 12, 31)
+
+    def test_date_range_with_same_start_and_end(self):
+        r = DateRange(start=date(2024, 1, 1), end=date(2024, 1, 1))
+        assert r.start == r.end
+
+    def test_date_range_raises_when_start_after_end(self):
+        with pytest.raises(ValueError, match="start.*after end"):
+            DateRange(start=date(2024, 12, 31), end=date(2024, 1, 1))
+
+    def test_date_range_is_frozen(self):
+        r = DateRange(start=date(2024, 1, 1), end=date(2024, 12, 31))
+        with pytest.raises(AttributeError):
+            r.start = date(2024, 6, 1)
+
+
+class TestDateRangeValidation:
+    def test_import_without_date_range_accepts_any_date(self, tmp_path):
+        content = (
+            "date,home_team,away_team,home_score,away_score\n"
+            "1900-01-01,Arsenal,Chelsea,1,0\n"
+            "2100-12-31,Liverpool,City,2,2\n"
+        )
+        results = import_matches(csv_file(tmp_path, content))
+        assert len(results) == 2
+
+    def test_date_within_range_accepted(self, tmp_path):
+        content = "date,home_team,away_team,home_score,away_score\n2024-06-15,Arsenal,Chelsea,1,0\n"
+        date_range = DateRange(start=date(2024, 1, 1), end=date(2024, 12, 31))
+        results = import_matches(csv_file(tmp_path, content), date_range=date_range)
+        assert len(results) == 1
+        assert results[0].date == date(2024, 6, 15)
+
+    def test_date_at_range_start_accepted(self, tmp_path):
+        content = "date,home_team,away_team,home_score,away_score\n2024-01-01,Arsenal,Chelsea,1,0\n"
+        date_range = DateRange(start=date(2024, 1, 1), end=date(2024, 12, 31))
+        results = import_matches(csv_file(tmp_path, content), date_range=date_range)
+        assert results[0].date == date(2024, 1, 1)
+
+    def test_date_at_range_end_accepted(self, tmp_path):
+        content = "date,home_team,away_team,home_score,away_score\n2024-12-31,Arsenal,Chelsea,1,0\n"
+        date_range = DateRange(start=date(2024, 1, 1), end=date(2024, 12, 31))
+        results = import_matches(csv_file(tmp_path, content), date_range=date_range)
+        assert results[0].date == date(2024, 12, 31)
+
+    def test_date_before_range_rejected(self, tmp_path):
+        content = "date,home_team,away_team,home_score,away_score\n2023-12-31,Arsenal,Chelsea,1,0\n"
+        date_range = DateRange(start=date(2024, 1, 1), end=date(2024, 12, 31))
+        with pytest.raises(InvalidMatch, match="outside valid range"):
+            import_matches(csv_file(tmp_path, content), date_range=date_range)
+
+    def test_date_after_range_rejected(self, tmp_path):
+        content = "date,home_team,away_team,home_score,away_score\n2025-01-01,Arsenal,Chelsea,1,0\n"
+        date_range = DateRange(start=date(2024, 1, 1), end=date(2024, 12, 31))
+        with pytest.raises(InvalidMatch, match="outside valid range"):
+            import_matches(csv_file(tmp_path, content), date_range=date_range)
+
+    def test_out_of_range_date_error_has_row_number(self, tmp_path):
+        content = (
+            "date,home_team,away_team,home_score,away_score\n"
+            "2024-06-01,Arsenal,Chelsea,1,0\n"    # row 2 — valid
+            "2025-01-01,Liverpool,City,2,2\n"     # row 3 — out of range
+        )
+        date_range = DateRange(start=date(2024, 1, 1), end=date(2024, 12, 31))
+        with pytest.raises(InvalidMatch) as exc_info:
+            import_matches(csv_file(tmp_path, content), date_range=date_range)
+        assert exc_info.value.row_number == 3
+
+    def test_out_of_range_date_error_has_reason(self, tmp_path):
+        content = "date,home_team,away_team,home_score,away_score\n2023-12-31,Arsenal,Chelsea,1,0\n"
+        date_range = DateRange(start=date(2024, 1, 1), end=date(2024, 12, 31))
+        with pytest.raises(InvalidMatch) as exc_info:
+            import_matches(csv_file(tmp_path, content), date_range=date_range)
+        reason = exc_info.value.reason
+        assert "2023-12-31" in reason
+        assert "2024-01-01" in reason and "2024-12-31" in reason
+
+    def test_multiple_matches_with_mixed_valid_and_invalid_dates(self, tmp_path):
+        content = (
+            "date,home_team,away_team,home_score,away_score\n"
+            "2024-01-15,Arsenal,Chelsea,1,0\n"    # row 2 — valid
+            "2024-02-10,Liverpool,City,2,2\n"     # row 3 — valid
+            "2023-12-01,Spurs,Everton,0,1\n"      # row 4 — invalid (before range)
+        )
+        date_range = DateRange(start=date(2024, 1, 1), end=date(2024, 12, 31))
+        with pytest.raises(InvalidMatch) as exc_info:
+            import_matches(csv_file(tmp_path, content), date_range=date_range)
+        assert exc_info.value.row_number == 4
+
+    def test_date_range_stops_at_first_out_of_range(self, tmp_path):
+        content = (
+            "date,home_team,away_team,home_score,away_score\n"
+            "2024-06-01,Arsenal,Chelsea,1,0\n"    # row 2 — valid
+            "2025-01-01,Liverpool,City,2,2\n"     # row 3 — out of range
+            "2025-02-01,Spurs,Everton,0,1\n"      # row 4 — also out of range, not reached
+        )
+        date_range = DateRange(start=date(2024, 1, 1), end=date(2024, 12, 31))
+        with pytest.raises(InvalidMatch) as exc_info:
+            import_matches(csv_file(tmp_path, content), date_range=date_range)
+        assert exc_info.value.row_number == 3
+
+    def test_date_range_with_single_day(self, tmp_path):
+        content = "date,home_team,away_team,home_score,away_score\n2024-06-15,Arsenal,Chelsea,1,0\n"
+        date_range = DateRange(start=date(2024, 6, 15), end=date(2024, 6, 15))
+        results = import_matches(csv_file(tmp_path, content), date_range=date_range)
+        assert len(results) == 1
+
+    def test_date_range_with_single_day_rejects_other_dates(self, tmp_path):
+        content = "date,home_team,away_team,home_score,away_score\n2024-06-16,Arsenal,Chelsea,1,0\n"
+        date_range = DateRange(start=date(2024, 6, 15), end=date(2024, 6, 15))
+        with pytest.raises(InvalidMatch, match="outside valid range"):
+            import_matches(csv_file(tmp_path, content), date_range=date_range)

@@ -10,6 +10,7 @@ import sys
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
+from typing import Optional
 
 
 REQUIRED_COLUMNS = {"date", "home_team", "away_team", "home_score", "away_score"}
@@ -42,6 +43,17 @@ class MatchResult:
     away_team: str
     home_score: int
     away_score: int
+
+
+@dataclass(frozen=True)
+class DateRange:
+    """Valid date range for match imports."""
+    start: date
+    end: date
+
+    def __post_init__(self) -> None:
+        if self.start > self.end:
+            raise ValueError(f"DateRange start ({self.start}) must not be after end ({self.end})")
 
 
 class RowError(ValueError):
@@ -93,7 +105,11 @@ def _parse_team(value: str, field: str, row_number: int) -> str:
     return _normalize_team_name(name)
 
 
-def _validate_row(row: dict, row_number: int) -> MatchResult:
+def _validate_row(
+    row: dict,
+    row_number: int,
+    date_range: Optional[DateRange] = None,
+) -> MatchResult:
     missing = REQUIRED_COLUMNS - row.keys()
     if missing:
         raise RowError(row_number, f"missing columns: {sorted(missing)}")
@@ -107,6 +123,13 @@ def _validate_row(row: dict, row_number: int) -> MatchResult:
     if home_team == away_team:
         raise InvalidMatch(row_number, f"home_team and away_team must differ, both are {home_team!r}")
 
+    if date_range is not None:
+        if match_date < date_range.start or match_date > date_range.end:
+            raise InvalidMatch(
+                row_number,
+                f"date {match_date} is outside valid range {date_range.start} to {date_range.end}",
+            )
+
     return MatchResult(
         date=match_date,
         home_team=home_team,
@@ -116,12 +139,14 @@ def _validate_row(row: dict, row_number: int) -> MatchResult:
     )
 
 
-def import_matches(path: Path) -> list[MatchResult]:
+def import_matches(path: Path, date_range: Optional[DateRange] = None) -> list[MatchResult]:
     """
     Parse *path* and return a list of MatchResult objects sorted chronologically.
 
+    If *date_range* is provided, raises InvalidMatch for dates outside the range.
+
     Raises RowError for the first invalid row encountered (parse errors).
-    Raises InvalidMatch for semantic errors (e.g., same team on both sides).
+    Raises InvalidMatch for semantic errors (e.g., same team on both sides, out of date range).
     Raises RowError for duplicate fixtures (same date, home_team, away_team).
     Raises ValueError if required columns are absent from the header.
     """
@@ -141,7 +166,7 @@ def import_matches(path: Path) -> list[MatchResult]:
 
         for row_number, raw_row in enumerate(reader, start=2):
             row = {k.strip(): v for k, v in raw_row.items() if k is not None}
-            match = _validate_row(row, row_number)
+            match = _validate_row(row, row_number, date_range=date_range)
             key = (match.date, match.home_team, match.away_team)
             if key in seen:
                 raise RowError(
