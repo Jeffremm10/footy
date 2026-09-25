@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from import_matches import MatchResult, RowError, import_matches
+from import_matches import MatchResult, RowError, import_matches, _normalize_team_name
 
 
 # ---------------------------------------------------------------------------
@@ -214,3 +214,97 @@ class TestChronologicalOrder:
         results = import_matches(csv_file(tmp_path, VALID_CSV))
         dates = [m.date for m in results]
         assert dates == sorted(dates)
+
+
+# ---------------------------------------------------------------------------
+# Team name normalization tests
+# ---------------------------------------------------------------------------
+
+class TestTeamNameNormalization:
+    def test_normalize_man_utd_to_manchester_united(self):
+        assert _normalize_team_name("Man Utd") == "Manchester United"
+
+    def test_normalize_man_u_to_manchester_united(self):
+        assert _normalize_team_name("Man U") == "Manchester United"
+
+    def test_normalize_utd_to_manchester_united(self):
+        assert _normalize_team_name("Utd") == "Manchester United"
+
+    def test_normalize_man_city_to_manchester_city(self):
+        assert _normalize_team_name("Man City") == "Manchester City"
+
+    def test_normalize_city_to_manchester_city(self):
+        assert _normalize_team_name("City") == "Manchester City"
+
+    def test_normalize_spurs_to_tottenham(self):
+        assert _normalize_team_name("Spurs") == "Tottenham Hotspur"
+
+    def test_normalize_barca_to_barcelona(self):
+        assert _normalize_team_name("Barca") == "FC Barcelona"
+
+    def test_normalize_barcelona_to_fc_barcelona(self):
+        assert _normalize_team_name("Barcelona") == "FC Barcelona"
+
+    def test_normalize_real_to_real_madrid(self):
+        assert _normalize_team_name("Real") == "Real Madrid"
+
+    def test_normalize_psg_to_paris_saint_germain(self):
+        assert _normalize_team_name("PSG") == "Paris Saint-Germain"
+
+    def test_unknown_team_name_returned_as_is(self):
+        assert _normalize_team_name("Random FC") == "Random FC"
+
+    def test_canonical_names_unchanged(self):
+        assert _normalize_team_name("Manchester United") == "Manchester United"
+        assert _normalize_team_name("Arsenal") == "Arsenal"
+
+    def test_home_team_normalized_in_import(self, tmp_path):
+        content = "date,home_team,away_team,home_score,away_score\n2024-01-15,Man Utd,Chelsea,2,1\n"
+        m = import_matches(csv_file(tmp_path, content))[0]
+        assert m.home_team == "Manchester United"
+
+    def test_away_team_normalized_in_import(self, tmp_path):
+        content = "date,home_team,away_team,home_score,away_score\n2024-01-15,Arsenal,Man City,2,1\n"
+        m = import_matches(csv_file(tmp_path, content))[0]
+        assert m.away_team == "Manchester City"
+
+    def test_both_teams_normalized_in_import(self, tmp_path):
+        content = "date,home_team,away_team,home_score,away_score\n2024-01-15,Man Utd,City,2,1\n"
+        m = import_matches(csv_file(tmp_path, content))[0]
+        assert m.home_team == "Manchester United"
+        assert m.away_team == "Manchester City"
+
+    def test_duplicate_detection_with_normalized_names(self, tmp_path):
+        content = (
+            "date,home_team,away_team,home_score,away_score\n"
+            "2024-01-01,Man Utd,City,1,0\n"
+            "2024-01-01,Manchester United,Manchester City,2,1\n"
+        )
+        with pytest.raises(RowError, match="duplicate"):
+            import_matches(csv_file(tmp_path, content))
+
+    def test_normalized_duplicate_row_number_correct(self, tmp_path):
+        content = (
+            "date,home_team,away_team,home_score,away_score\n"
+            "2024-01-01,Man Utd,City,1,0\n"
+            "2024-01-01,Manchester United,Manchester City,2,1\n"
+        )
+        with pytest.raises(RowError) as exc_info:
+            import_matches(csv_file(tmp_path, content))
+        assert exc_info.value.row_number == 3
+
+    def test_normalized_same_teams_different_date_allowed(self, tmp_path):
+        content = (
+            "date,home_team,away_team,home_score,away_score\n"
+            "2024-01-01,Man Utd,City,1,0\n"
+            "2024-02-01,Manchester United,Manchester City,2,1\n"
+        )
+        results = import_matches(csv_file(tmp_path, content))
+        assert len(results) == 2
+        assert results[0].home_team == "Manchester United"
+        assert results[1].home_team == "Manchester United"
+
+    def test_cannot_have_same_normalized_team_for_both_sides(self, tmp_path):
+        content = "date,home_team,away_team,home_score,away_score\n2024-01-01,Man Utd,Utd,1,0\n"
+        with pytest.raises(RowError, match="differ"):
+            import_matches(csv_file(tmp_path, content))

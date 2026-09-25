@@ -14,6 +14,26 @@ from pathlib import Path
 
 REQUIRED_COLUMNS = {"date", "home_team", "away_team", "home_score", "away_score"}
 
+# Team name normalization: friendly names → canonical names
+TEAM_ALIASES = {
+    "Man Utd": "Manchester United",
+    "Man City": "Manchester City",
+    "Man U": "Manchester United",
+    "Utd": "Manchester United",
+    "City": "Manchester City",
+    "Spurs": "Tottenham Hotspur",
+    "Everton": "Everton",
+    "Liverpool": "Liverpool",
+    "Arsenal": "Arsenal",
+    "Chelsea": "Chelsea",
+    "Barca": "FC Barcelona",
+    "Barcelona": "FC Barcelona",
+    "Real": "Real Madrid",
+    "Real Madrid": "Real Madrid",
+    "Bayern": "FC Bayern Munich",
+    "PSG": "Paris Saint-Germain",
+}
+
 
 @dataclass(frozen=True)
 class MatchResult:
@@ -52,11 +72,16 @@ def _parse_date(value: str, row_number: int) -> date:
     raise RowError(row_number, f"date {value!r} does not match YYYY-MM-DD, DD/MM/YYYY, or DD-MM-YYYY")
 
 
+def _normalize_team_name(name: str) -> str:
+    """Normalize a team name using the TEAM_ALIASES mapping."""
+    return TEAM_ALIASES.get(name, name)
+
+
 def _parse_team(value: str, field: str, row_number: int) -> str:
     name = value.strip()
     if not name:
         raise RowError(row_number, f"{field} must not be blank")
-    return name
+    return _normalize_team_name(name)
 
 
 def _validate_row(row: dict, row_number: int) -> MatchResult:
