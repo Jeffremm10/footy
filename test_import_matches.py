@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from import_matches import MatchResult, RowError, import_matches, _normalize_team_name
+from import_matches import MatchResult, RowError, InvalidMatch, import_matches, _normalize_team_name
 
 
 # ---------------------------------------------------------------------------
@@ -130,7 +130,7 @@ class TestInvalidRows:
 
     def test_same_home_and_away_team(self, tmp_path):
         content = "date,home_team,away_team,home_score,away_score\n2024-01-01,Arsenal,Arsenal,1,0\n"
-        with pytest.raises(RowError, match="differ"):
+        with pytest.raises(InvalidMatch, match="differ"):
             import_matches(csv_file(tmp_path, content))
 
     def test_invalid_date_format(self, tmp_path):
@@ -152,8 +152,8 @@ class TestInvalidRows:
         """Import stops at the first invalid row; later rows are not processed."""
         content = (
             "date,home_team,away_team,home_score,away_score\n"
-            "2024-01-01,Arsenal,Arsenal,1,0\n"   # row 2 — same team
-            "2024-01-02,Liverpool,City,1,0\n"    # row 3 — valid but should not reach
+            "2024-01-01,Arsenal,Chelsea,bad,0\n"  # row 2 — invalid score
+            "2024-01-02,Liverpool,City,1,0\n"     # row 3 — valid but should not reach
         )
         with pytest.raises(RowError):
             import_matches(csv_file(tmp_path, content))
@@ -306,5 +306,63 @@ class TestTeamNameNormalization:
 
     def test_cannot_have_same_normalized_team_for_both_sides(self, tmp_path):
         content = "date,home_team,away_team,home_score,away_score\n2024-01-01,Man Utd,Utd,1,0\n"
-        with pytest.raises(RowError, match="differ"):
+        with pytest.raises(InvalidMatch, match="differ"):
             import_matches(csv_file(tmp_path, content))
+
+
+# ---------------------------------------------------------------------------
+# Invalid match (semantic error) tests
+# ---------------------------------------------------------------------------
+
+class TestInvalidMatch:
+    def test_same_canonical_team_raises_invalid_match(self, tmp_path):
+        content = "date,home_team,away_team,home_score,away_score\n2024-01-01,Arsenal,Arsenal,1,0\n"
+        with pytest.raises(InvalidMatch) as exc_info:
+            import_matches(csv_file(tmp_path, content))
+        assert "differ" in str(exc_info.value)
+
+    def test_invalid_match_has_row_number(self, tmp_path):
+        content = "date,home_team,away_team,home_score,away_score\n2024-01-01,Arsenal,Arsenal,1,0\n"
+        with pytest.raises(InvalidMatch) as exc_info:
+            import_matches(csv_file(tmp_path, content))
+        assert exc_info.value.row_number == 2
+
+    def test_invalid_match_has_reason(self, tmp_path):
+        content = "date,home_team,away_team,home_score,away_score\n2024-01-01,Arsenal,Arsenal,1,0\n"
+        with pytest.raises(InvalidMatch) as exc_info:
+            import_matches(csv_file(tmp_path, content))
+        assert "Arsenal" in exc_info.value.reason
+
+    def test_same_team_on_both_sides_after_normalization(self, tmp_path):
+        content = "date,home_team,away_team,home_score,away_score\n2024-01-01,Man Utd,Utd,1,0\n"
+        with pytest.raises(InvalidMatch) as exc_info:
+            import_matches(csv_file(tmp_path, content))
+        assert "Manchester United" in str(exc_info.value)
+        assert exc_info.value.row_number == 2
+
+    def test_different_aliases_same_canonical_team(self, tmp_path):
+        content = "date,home_team,away_team,home_score,away_score\n2024-01-01,Man Utd,Man U,1,0\n"
+        with pytest.raises(InvalidMatch) as exc_info:
+            import_matches(csv_file(tmp_path, content))
+        assert exc_info.value.row_number == 2
+
+    def test_invalid_match_stops_import_at_first_occurrence(self, tmp_path):
+        content = (
+            "date,home_team,away_team,home_score,away_score\n"
+            "2024-01-01,Arsenal,Chelsea,1,0\n"      # row 2 — valid
+            "2024-01-02,Liverpool,Liverpool,0,0\n"  # row 3 — invalid match
+            "2024-01-03,Man Utd,Spurs,1,1\n"       # row 4 — valid but not reached
+        )
+        with pytest.raises(InvalidMatch) as exc_info:
+            import_matches(csv_file(tmp_path, content))
+        assert exc_info.value.row_number == 3
+
+    def test_invalid_match_exception_distinct_from_row_error(self, tmp_path):
+        content = "date,home_team,away_team,home_score,away_score\n2024-01-01,Arsenal,Arsenal,1,0\n"
+        try:
+            import_matches(csv_file(tmp_path, content))
+            pytest.fail("Should have raised InvalidMatch")
+        except InvalidMatch:
+            pass  # Expected
+        except RowError:
+            pytest.fail("Should raise InvalidMatch, not RowError")

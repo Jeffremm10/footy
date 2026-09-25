@@ -45,7 +45,16 @@ class MatchResult:
 
 
 class RowError(ValueError):
-    """Raised when a CSV row fails validation."""
+    """Raised when a CSV row fails validation (parse error)."""
+
+    def __init__(self, row_number: int, reason: str):
+        self.row_number = row_number
+        self.reason = reason
+        super().__init__(f"Row {row_number}: {reason}")
+
+
+class InvalidMatch(ValueError):
+    """Raised when a match record is semantically invalid (e.g., same team on both sides)."""
 
     def __init__(self, row_number: int, reason: str):
         self.row_number = row_number
@@ -96,7 +105,7 @@ def _validate_row(row: dict, row_number: int) -> MatchResult:
     away_score = _parse_score(row["away_score"].strip(), "away_score", row_number)
 
     if home_team == away_team:
-        raise RowError(row_number, f"home_team and away_team must differ, both are {home_team!r}")
+        raise InvalidMatch(row_number, f"home_team and away_team must differ, both are {home_team!r}")
 
     return MatchResult(
         date=match_date,
@@ -111,8 +120,9 @@ def import_matches(path: Path) -> list[MatchResult]:
     """
     Parse *path* and return a list of MatchResult objects sorted chronologically.
 
-    Raises RowError for the first invalid row encountered, including duplicate
-    fixtures (same date, home_team, away_team).
+    Raises RowError for the first invalid row encountered (parse errors).
+    Raises InvalidMatch for semantic errors (e.g., same team on both sides).
+    Raises RowError for duplicate fixtures (same date, home_team, away_team).
     Raises ValueError if required columns are absent from the header.
     """
     results: list[MatchResult] = []
@@ -157,7 +167,7 @@ def main(argv: list[str] | None = None) -> None:
 
     try:
         matches = import_matches(path)
-    except (ValueError, RowError) as exc:
+    except (ValueError, RowError, InvalidMatch) as exc:
         sys.exit(f"error: {exc}")
 
     print(f"Imported {len(matches)} match(es)")
